@@ -1,0 +1,108 @@
+# File Path for CSV (You can move this to a config file if necessary)
+$csvFilePath = "C:\Users\7000031682\Downloads\Autopilot\Windows Autopilot devices_2024-09-23T06_26_46.880Z.csv"
+
+# Tenant details (Retrieved from environment variables for security)
+$tenantId = $env:AZURE_TENANT_ID  # Set as environment variable AZURE_TENANT_ID
+$clientId = $env:AZURE_CLIENT_ID  # Set as environment variable AZURE_CLIENT_ID
+$clientSecret = $env:AZURE_CLIENT_SECRET  # Set as environment variable AZURE_CLIENT_SECRET
+
+# Set Execution Policy
+cls
+Set-ExecutionPolicy -ExecutionPolicy 'ByPass' -Scope 'Process' -Force -ErrorAction 'Stop'
+$error.clear()
+
+Write-Host "=========Starting Bulk update Windows Autopilot groupTags using PowerShell and CSV================"
+Write-Host ""
+
+# Check for Microsoft.Graph.Intune module
+$MGIModule = Get-module -Name "Microsoft.Graph.Intune" -ListAvailable
+If ($MGIModule -eq $null) {
+    Write-Host "Microsoft.Graph.Intune module is not Installed" -ForegroundColor Yellow
+    Write-Host "Installing Microsoft.Graph.Intune module" -ForegroundColor Yellow
+    Install-Module -Name Microsoft.Graph.Intune -Force
+    Write-Host "Microsoft.Graph.Intune successfully Installed" -ForegroundColor Green
+    Import-Module Microsoft.Graph.Intune -Force
+} else {
+    Write-Host "Microsoft.Graph.Intune is Installed" -ForegroundColor Green
+    Import-Module Microsoft.Graph.Intune -Force
+}
+
+# Connect to Microsoft Graph
+$authority = "https://login.microsoftonline.com/$tenantId"
+Update-MSGraphEnvironment -AppId $clientId -Quiet
+Update-MSGraphEnvironment -AuthUrl $authority -Quiet
+Connect-MSGraph -ClientSecret $clientSecret
+
+# Log file paths
+$successLogFilePath = "c:\windows\temp\success.log"
+$failedLogFilePath = "c:\windows\temp\failed.log"
+
+# Create log files if they do not exist
+if (-not (Test-Path $successLogFilePath)) {
+    New-Item -Path $successLogFilePath -ItemType File
+}
+
+if (-not (Test-Path $failedLogFilePath)) {
+    New-Item -Path $failedLogFilePath -ItemType File
+}
+
+# Import the CSV file
+$csvData = Import-Csv -Path $csvFilePath
+$totalCount = $csvData.Count  # Total number of devices
+$progress = 1
+
+Write-Host "Total Device count in CSV file for updating Group Tag: $totalCount" -ForegroundColor White
+Write-Host ""
+
+# Initialize success and failed logs
+$successLog = @()
+$failedLog = @()
+
+foreach ($row in $csvData) {
+    $serialNumber = $row.'Serial number'  # Take the serial number from the 'Serial number' column
+    $groupTag = "APSISC"  # Constant group tag
+
+    # Use Get-AutopilotDevice and Set-AutopilotDevice cmdlets
+    $autopilotDevice = Get-AutopilotDevice -serial $serialNumber
+
+    if ($autopilotDevice) {
+        Write-Host "$progress = Matched, updating New Group Tag for serial number: $serialNumber" -ForegroundColor Yellow
+        
+         Set-AutopilotDevice -Id $autopilotDevice.Id -GroupTag $groupTag
+
+        Write-Host "$progress = Updated New Group Tag for Serial Number: $serialNumber = '$groupTag' (✓)" -ForegroundColor Green
+        # Log success
+        $successLog += "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') Updated Group Tag for Serial Number: $serialNumber = '$groupTag'"
+    } else {
+        Write-Host "$progress = Skipping as Serial Number not found in Intune Autopilot Service: $serialNumber (X)" -ForegroundColor Red
+        # Log failure
+        $failedLog += "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') Skipping as Serial Number not found in Intune Autopilot Service: $serialNumber"
+    }
+
+    $progress++
+    
+    # Avoid division by zero
+    if ($totalCount -gt 0) {
+        $percentComplete = [String]::Format("{0:0.00}", (($progress - 1) / $totalCount) * 100)
+        Write-Progress -Activity "Updating Group Tag for $progress --> $serialNumber" -Status "Progress: $percentComplete% Complete" -PercentComplete $percentComplete
+    }
+}
+
+Write-Host "=========End Bulk update Windows Autopilot groupTags using PowerShell and CSV======================"
+Write-Host ""
+
+# Display final results
+Write-Host "=========Final Script Execution Result - Start======================================================="
+Write-Host ""
+Write-Host "Total Devices: $totalCount" -ForegroundColor White
+Write-Host "Total Successes: $($successLog.Count)" -ForegroundColor Green
+Write-Host "Total Failures: $($failedLog.Count)" -ForegroundColor Red
+Write-Host ""
+Write-Host "========Final Script Execution Result - End=========================================================="
+Write-Host ""
+
+# Save success and failed logs to separate files
+$successLog | Out-File -FilePath $successLogFilePath
+$failedLog | Out-File -FilePath $failedLogFilePath
+Write-Host "Success log saved to $successLogFilePath."
+Write-Host "Failed log saved to $failedLogFilePath."
